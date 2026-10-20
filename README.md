@@ -178,6 +178,38 @@ The synthetic data contains deliberate "real-world" messiness for cleaning exerc
 
 ---
 
+## 🧹 Data Cleaning Rules
+
+### 1. Customers (`data/clean/customers.csv`)
+1. **City standardisation**: Leading and trailing spaces are removed and title-casing is applied (`.str.strip().str.title()`), standardising raw variations to exactly 6 canonical cities (Pune: 227, Delhi: 210, Bengaluru: 197, Chennai: 191, Hyderabad: 191, Mumbai: 184).
+2. **Gender mapping**: Raw spellings are stripped, lowercased, and mapped (`m`/`male` → `male`, `f`/`female` → `female`, blank/unmapped → `unknown`), resulting in female: 610, male: 560, unknown: 30.
+3. **Age validation & imputation**: Ages outside the range `[10, 100]` are treated as missing (`NaN`). Missing ages are imputed with the median age of the customer's city using `groupby('city')['age'].transform('median')`. Resulting dataset has 0 missing ages, and all customer ages lie between 18 and 60.
+4. **Signup date conversion**: Converted `signup_date` to pandas datetime (`datetime64[us]`).
+
+### 2. Orders (`data/clean/orders.csv`)
+Executed sequentially in this exact order:
+1. **Convert `order_ts` to datetime**: Converted using `pd.to_datetime(orders['order_ts'])`.
+2. **Remove exact duplicate rows**: Dropped 119 exact duplicate rows using `orders.drop_duplicates()`, reducing 13,084 raw rows to 12,965 rows.
+3. **Deduplicate `order_id` keeping latest `order_ts`**: Resolved multi-status orders (earlier `pending` records and later final records) by sorting by `['order_id', 'order_ts']` and keeping the last record per `order_id`. Yields exactly 12,309 unique orders (11,110 completed, 1,199 cancelled, and 0 pending).
+4. **Numeric `order_amount` & price formula imputation**: Converted `order_amount` to numeric, coercing unparseable entries (`"N/A"`, `"error"`) to `NaN`. Filled missing values using: `round(price_inr * quantity * (1 - discount_pct / 100), 2)`. Results in 0 missing values and a completed orders total sum of exactly INR 2,998,668.80.
+5. **Handle `delivery_minutes` (completed vs cancelled)**: Set negative durations (< 0) to `NaN`. For completed orders, filled missing delivery minutes with the median delivery time of that product's category among completed orders using `groupby('category')['delivery_minutes'].transform('median')`. For cancelled orders, left `delivery_minutes` missing (`NaN`), reflecting that cancelled orders were never delivered.
+
+---
+
+## 📊 SQL Analysis (`sql/queries.sql`)
+
+Analytical queries executed against `data/instamart.db` using `pd.read_sql_query`:
+
+- **Q1 (WHERE then HAVING)**: Filtered completed orders with `order_amount > 500` and kept customers whose total spend exceeds INR 8,000 (30 customers).
+- **Q2 (Three-Table Join)**: Aggregated completed revenue across city and product category across 30 cells totaling INR 2,998,668.80 (largest cell: Bengaluru / Electronics at INR 233,909.45).
+- **Q3 (Scalar Subquery)**: Identified 11 catalogue products priced strictly above the catalogue average (INR 289.32).
+- **Q4 (LEFT JOIN)**: Found 25 customers who have placed zero completed orders.
+- **Q5 (Common Table Expression)**: Computed benchmark customer average spend (INR 2,552.06) via two CTEs and returned 550 customers exceeding that benchmark.
+- **Q6 (Ranking Window Functions)**: Computed city-partitioned spend ranks; ties cause `RANK()` to differ from `ROW_NUMBER()` because `RANK()` assigns identical ranks to tied rows and skips subsequent ranks, whereas `ROW_NUMBER()` strictly assigns unique, incrementing integers regardless of ties.
+- **Q7 (Running Total)**: Evaluated 183 daily revenue rows from 2025-04-01 to 2025-09-30, achieving a cumulative total of exactly INR 2,998,668.80.
+
+---
+
 ## 📋 Policy Documents
 
 Five plain-text policies cover:
