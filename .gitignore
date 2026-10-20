@@ -1,19 +1,24 @@
-# Python
+# Secrets
+.env
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
+
+# Distribution / packaging
 *.egg-info/
 dist/
 build/
 *.egg
 .eggs/
-
-# Virtual environments
-.venv/
-venv/
-env/
-ENV/
 
 # IDEs
 .vscode/
@@ -29,10 +34,6 @@ Thumbs.db
 .ipynb_checkpoints/
 *.ipynb
 
-# Generated data (re-create with generate_data.py)
+# Generated data (regenerate with: python generate_data.py)
 data/raw/
 data/policies/
-
-# Secrets / credentials
-.env
-*.key

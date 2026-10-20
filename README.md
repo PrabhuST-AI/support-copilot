@@ -8,57 +8,100 @@ A capstone project that builds an **offline-first, deterministic AI support pipe
 
 ```
 support-copilot/
+├── .venv/                # Isolated virtual environment (not committed)
+├── .gitignore            # Excludes .env, .venv/, __pycache__/, generated data
 ├── generate_data.py      # Synthetic data generator (run once)
 ├── mock_llm.py           # Offline LLM stand-in (classifier · policy · agent)
-├── requirements.txt      # Python dependencies
+├── requirements.txt      # Pinned deps from pip freeze
 ├── data/
-│   ├── raw/              # Generated CSV files
+│   ├── raw/              # Generated CSV files (git-ignored, recreate with step 4)
 │   │   ├── customers.csv
 │   │   ├── products.csv
 │   │   ├── orders.csv
 │   │   ├── tickets.csv
 │   │   ├── policy_eval.csv
 │   │   └── agent_scenarios.csv
-│   └── policies/         # Plain-text policy documents
-│       ├── refund_policy.txt
-│       ├── delivery_policy.txt
-│       ├── payment_policy.txt
-│       ├── privacy_policy.txt
-│       └── escalation_policy.txt
+│   ├── clean/            # Cleaned CSVs (produced by cleaning notebook/script)
+│   ├── policies/         # Plain-text policy documents (git-ignored, recreate with step 4)
+│   │   ├── refund_policy.txt
+│   │   ├── delivery_policy.txt
+│   │   ├── payment_policy.txt
+│   │   ├── privacy_policy.txt
+│   │   └── escalation_policy.txt
+│   └── sql/              # SQL queries against instamart.db
+│       └── queries.sql
 ```
 
 ---
 
-## 🚀 Quick Start
+## 🔁 Reproduce
 
-### 1. Clone the repo
+Follow these numbered steps exactly to go from a fresh clone to a fully working environment.
+
+**1. Clone the repository and switch to `main`**
 
 ```bash
 git clone https://github.com/PrabhuST-AI/support-copilot.git
 cd support-copilot
+git checkout main
 ```
 
-### 2. Install dependencies
+**2. Create an isolated virtual environment**
+
+```bash
+python3 -m venv .venv
+```
+
+This creates a self-contained Python environment in `.venv/` (excluded from git via `.gitignore`).
+
+**3. Activate the environment and install dependencies**
+
+```bash
+# macOS / Linux
+source .venv/bin/activate
+
+# Windows
+.venv\Scripts\activate
+```
 
 ```bash
 pip install -r requirements.txt
 ```
 
-> The core scripts (`generate_data.py`, `mock_llm.py`) use **only the Python standard library** — no extra packages required.
+`requirements.txt` was produced by `pip freeze` and contains exact pinned versions:
 
-### 3. Generate synthetic data
-
-```bash
-python3 generate_data.py
+```
+numpy==2.5.4
+pandas==3.0.6
+python-dateutil==2.9.0.post0
+six==1.17.0
 ```
 
-Expected output:
+**4. Generate synthetic data**
+
+```bash
+python generate_data.py
+```
+
+Expected last line of output (must match exactly):
 
 ```
 generated: customers=1200 products=40 orders_raw=13084 tickets=164
 ```
 
-This writes all CSV files into `data/raw/` and policy text files into `data/policies/`.
+This writes:
+- `data/raw/` — six CSV files (customers, products, orders, tickets, policy_eval, agent_scenarios)
+- `data/policies/` — five plain-text policy files
+
+Both directories are git-ignored and must be recreated via this step after a fresh clone.
+
+**5. Verify the environment (optional smoke test)**
+
+```bash
+python -c "from mock_llm import chat; print('mock_llm OK')"
+```
+
+Expected output: `mock_llm OK`
 
 ---
 

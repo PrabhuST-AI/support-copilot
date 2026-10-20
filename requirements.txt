@@ -1,9 +1,4 @@
-# support-copilot dependencies
-# Core scripts (generate_data.py, mock_llm.py) use only the Python standard library.
-# Add packages here as you build classifiers, agents, notebooks, etc.
-
-# Example future dependencies:
-# pandas>=2.0
-# scikit-learn>=1.4
-# openai>=1.0
-# sentence-transformers>=3.0
+numpy==2.5.4
+pandas==3.0.6
+python-dateutil==2.9.0.post0
+six==1.17.0
