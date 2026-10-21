@@ -222,6 +222,86 @@ Five plain-text policies cover:
 
 ---
 
+## 🤖 Part D: Autonomous ReAct Refund Agent
+
+The autonomous customer support agent operates via a ReAct (Reasoning + Acting) execution loop in [`react_agent.py`](file:///Users/prabhust/Documents/support-copilot/react_agent.py) (`run_agent`), interfacing with [`mock_llm.chat`](file:///Users/prabhust/Documents/support-copilot/mock_llm.py) and five deterministic domain tools defined in [`agent_tools.py`](file:///Users/prabhust/Documents/support-copilot/agent_tools.py):
+- `get_order(order_id)`: Fetches database order status, amount, and delivery minutes.
+- `search_policy(query)`: Cosine TF-IDF retrieval across policy chunks.
+- `calculate_refund(order_amount, delivery_minutes)`: Validates delivery delay (> 45 minutes).
+- `issue_refund(order_id, refund_inr)`: Automatically executes and logs refunds up to ₹1,000 to [`outputs/refund_ledger.jsonl`](file:///Users/prabhust/Documents/support-copilot/outputs/refund_ledger.jsonl).
+- `escalate_to_human(order_id, refund_inr)`: Escalates refunds exceeding ₹1,000 to human leads with audit trail.
+
+### Scenario Evaluation Results
+
+All 7 evaluation rows from [`data/raw/agent_scenarios.csv`](file:///Users/prabhust/Documents/support-copilot/data/raw/agent_scenarios.csv) were processed and recorded to [`outputs/agent_runs.jsonl`](file:///Users/prabhust/Documents/support-copilot/outputs/agent_runs.jsonl):
+
+| Scenario ID | Status | Refund Amount | Model Calls | Tokens Used |
+|---|---|---|---|---|
+| `S1` | **REFUND** | 128.25 | 5 | 897 |
+| `S2` | **REFUND** | 135.00 | 5 | 897 |
+| `S3` | **ESCALATE** | 1999.00 | 5 | 884 |
+| `S4` | **DENIED** | 0.00 | 4 | 605 |
+| `S5` | **DENIED** | 0.00 | 3 | 337 |
+| `S6` | **NOT_FOUND** | 0.00 | 2 | 72 |
+| `S7` | **FALLBACK_MAX_ITERATIONS** | 0.00 | 6 | 3000 |
+
+### Safety Limits & Graceful Fallback Demonstrations
+
+To guarantee safe and bounded execution in production, the agent enforces three independent guardrails:
+1. **Iteration Limit (`max_iterations=6`)**: Terminate after 6 model calls without a final answer (`FALLBACK_MAX_ITERATIONS`). Prevents infinite loops caused by cyclical model queries.
+2. **Cumulative Token Budget (`token_limit=6000`)**: After each model call, add `usage.total_tokens` to `tokens_used`. If `tokens_used > token_limit`, stop immediately without executing the requested tool (`FALLBACK_TOKEN_LIMIT`).
+3. **Wall-Clock Timeout (`time_limit_seconds=10.0`)**: Evaluated at the top of every iteration using `time.monotonic()` (`elapsed >= time_limit_seconds`). If exceeded, stop immediately (`FALLBACK_TIMEOUT`).
+
+Every fallback returns all completed steps so far, zero unauthorized refund disbursement, and a short human-handoff summary string in `final_answer`.
+
+| Demo Run | Scenario | Condition / Guardrail | Resulting Status | Model Calls | Steps Completed | Tokens Used | Final Answer / Human Handoff |
+|---|---|---|---|---|---|---|---|
+| **Max Iterations** | `S7` | `max_iterations=6` | `FALLBACK_MAX_ITERATIONS` | 6 | 6 | 3000 | `FALLBACK_MAX_ITERATIONS: Maximum iterations (6) reached without final answer; handing off to human support lead.` |
+| **Token Limit** | `S1` | `token_limit=200` | `FALLBACK_TOKEN_LIMIT` | 3 | 2 | 354 | `FALLBACK_TOKEN_LIMIT: Cumulative token limit of 200 exceeded (accumulated 354); handing off to human support lead.` |
+| **Timeout Limit** | `S1` | `time_limit_seconds=0` | `FALLBACK_TIMEOUT` | 0 | 0 | 0 | `FALLBACK_TIMEOUT: Wall-clock limit of 0s reached (elapsed 0.0000s); handing off to human support lead.` |
+
+- **Token Limit Verification**: In the `token_limit=200` run on `S1`, call 1 (`get_order`) used 38 tokens, call 2 (`search_policy`) used 62 tokens (cumulative 100 tokens), and call 3 returned a request for `calculate_refund` adding 254 tokens (cumulative 354 > 200). The agent immediately aborted without executing `calculate_refund`, preserving safe state with only 2 executed steps.
+- **Timeout Verification**: When `time_limit_seconds=0`, `elapsed >= 0` evaluates to `True` at the top of iteration 1 before the first model call is dispatched, guaranteeing zero LLM spend across all platforms.
+
+### Resumable Execution & Crash Recovery (Scenario S1 Demo)
+
+To ensure fault tolerance against process crashes, network dropouts, or worker preemptions, the agent implements checkpointed state persistence:
+- **Checkpoint Persistence**: After every tool observation is appended to the message list, a persistent snapshot is saved to `state/<run_id>.json`.
+- **Checkpoint Schema**: Contains `run_id`, `scenario_id`, the full conversation `messages`, `tokens_used`, `step_number`, `tools_executed`, `steps`, `llm_calls`, `max_iterations`, `token_limit`, and `time_limit_seconds`.
+- **Resumption (`resume_agent(run_id)`)**: Loads the checkpoint from disk and resumes the ReAct deliberation loop from the exact point of interruption without duplicating previously executed tools.
+
+#### Crash & Recovery Demonstration (Scenario S1)
+A simulated crash (`SimulatedCrashError`) was injected immediately after the second tool execution and after its checkpoint was safely written to `state/s1_crash_demo.json`. Resumption was then triggered via `resume_agent('s1_crash_demo')`.
+
+**Tools executed across the crash and resume, in exact order:**
+1. `get_order` *(Pre-crash execution, step 1: retrieved order details for `ORD-100048`)*
+2. `search_policy` *(Pre-crash execution, step 2: retrieved late-delivery refund terms)*
+   - *💥 SIMULATED CRASH: Process killed right after step 2 checkpoint persisted to disk.*
+   - *🔄 RESUMED: `resume_agent('s1_crash_demo')` reloads checkpoint and continues loop.*
+3. `calculate_refund` *(Post-resume execution, step 3: computed refund amount ₹128.25)*
+4. `issue_refund` *(Post-resume execution, step 4: approved and logged refund to `outputs/refund_ledger.jsonl`)*
+
+| Phase | Step | Tool Executed | State / Outcome |
+|---|---|---|---|
+| **Pre-Crash** | Step 1 | `get_order` | Checkpoint written to `state/s1_crash_demo.json` |
+| **Pre-Crash** | Step 2 | `search_policy` | Checkpoint written to `state/s1_crash_demo.json` (`step_number=2`, `tools_executed=['get_order', 'search_policy']`) |
+| **Crash Trigger** | - | - | Simulated crash raised immediately after step 2 checkpoint |
+| **Resume Call** | - | - | `resume_agent('s1_crash_demo')` called from persisted state |
+| **Post-Resume** | Step 3 | `calculate_refund` | Checkpoint updated (`step_number=3`, `refund_inr=128.25`) |
+| **Post-Resume** | Step 4 | `issue_refund` | Checkpoint updated (`step_number=4`, `refund_inr=128.25`) |
+| **Final State** | - | - | Status **REFUND**, Amount **₹128.25**, LLM Calls: 5 |
+
+**Outcome**: Exactly 4 tool executions occurred across both halves of the run (`get_order` → `search_policy` → `calculate_refund` → `issue_refund`), zero tools were repeated or skipped, and the final state concluded with status **REFUND** and ₹128.25.
+
+---
+
+## ⚠️ Limitations and Next Steps
+
+- **Post-Hoc Segment Evaluation**: The retention list is illustrative and not a leakage-free evaluation because the Premium customer segment flag is a post-hoc whole-window label derived from RFM clustering across the entire observation window (including the September window that defines the lapse target label). (The model's own features strictly use only orders before the cutoff, as required.)
+- **Next Steps**: Future iterations should compute RFM customer segments dynamically using pre-cutoff order history only, test cost-sensitive loss functions, and evaluate retention interventions through randomized A/B holdout testing.
+
+---
+
 ## 🤝 Contributing
 
 Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
